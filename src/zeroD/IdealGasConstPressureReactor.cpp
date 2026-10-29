@@ -94,7 +94,7 @@ void IdealGasConstPressureReactor::eval(double time, double* LHS, double* RHS)
         double S_H2O_original = m_wdot[k_H2O];
 
         // 3. Define the replacement source
-        double S_H2O_replacement = S_H2O_original;
+        double S_H2O_replacement = 1.10 * S_H2O_original;
 
         // 4. Feed the replacement back into the reactor
         m_wdot[k_H2O] = S_H2O_replacement;
