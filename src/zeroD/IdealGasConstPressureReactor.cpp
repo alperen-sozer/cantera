@@ -82,6 +82,23 @@ void IdealGasConstPressureReactor::eval(double time, double* LHS, double* RHS)
 
     if (m_chem) {
         m_kin->getNetProductionRates(&m_wdot[0]); // "omega dot"
+
+        // =============================
+        // Experiment A0: H2O Source Term Pass-Through
+        // =============================
+
+        // 1. Find the H2O species index
+        size_t k_H2O = m_thermo->speciesIndex("H2O");
+
+        // 2. Read the original H2O production rate
+        double S_H2O_original = m_wdot[k_H2O];
+
+        // 3. Define the replacement source
+        double S_H2O_replacement = S_H2O_original;
+
+        // 4. Feed the replacement back into the reactor
+        m_wdot[k_H2O] = S_H2O_replacement;
+
     }
 
     // external heat transfer
