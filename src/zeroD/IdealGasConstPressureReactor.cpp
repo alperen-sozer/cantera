@@ -10,8 +10,126 @@
 #include "cantera/thermo/ThermoPhase.h"
 #include "cantera/base/utilities.h"
 
+// Include funcitons for table reading
+#include <algorithm>
+#include <cmath>
+#include <cstdlib>
+#include <fstream>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
+
 namespace Cantera
 {
+
+// ========================================
+// EXPERIMENT A1: H2O SOURCE TABLE LOOKUP
+// ========================================
+namespace {
+
+double lookupH2OSource(double time)
+{
+    using Point = std::pair<double, double>;
+
+    // Load the table once, on the first function call.
+    static const std::vector<Point> table = []() {
+        const char* path = std::getenv("CANTERA_H2O_TABLE");
+
+        if (!path) {
+            throw std::runtime_error(
+                "CANTERA_H2O_TABLE environment variable is not set"
+            );
+        }
+
+        std::ifstream file(path);
+
+        if (!file.is_open()) {
+            throw std::runtime_error(
+                "Cannot open H2O source table: " + std::string(path)
+            );
+        }
+
+        std::vector<Point> data;
+        std::string line;
+
+        // Skip CSV header.
+        std::getline(file, line);
+
+        while (std::getline(file, line)) {
+            if (line.empty()) {
+                continue;
+            }
+
+            auto comma = line.find(',');
+
+            if (comma == std::string::npos) {
+                throw std::runtime_error("Invalid H2O table row");
+            }
+
+            double t = std::stod(line.substr(0, comma));
+            double s = std::stod(line.substr(comma + 1));
+
+            if (!std::isfinite(t) || !std::isfinite(s)) {
+                throw std::runtime_error("Non-finite H2O table value");
+            }
+
+            if (!data.empty() && t <= data.back().first) {
+                throw std::runtime_error(
+                    "H2O table times must be strictly increasing"
+                );
+            }
+
+            data.emplace_back(t, s);
+        }
+
+        if (data.size() < 2) {
+            throw std::runtime_error(
+                "H2O source table requires at least two points"
+            );
+        }
+
+        return data;
+    }();
+
+    // Use endpoint values outside the tabulated range.
+    if (time <= table.front().first) {
+        return table.front().second;
+    }
+
+    if (time >= table.back().first) {
+        return table.back().second;
+    }
+
+    // Find the first table entry with time >= requested time.
+    auto upper = std::lower_bound(
+        table.begin(), table.end(), time,
+        [](const Point& point, double t) {
+            return point.first < t;
+        }
+    );
+
+    if (upper == table.begin()) {
+        return upper->second;
+    }
+
+    if (upper == table.end()) {
+        return table.back().second;
+    }
+
+    auto lower = upper - 1;
+
+    double fraction =
+        (time - lower->first) /
+        (upper->first - lower->first);
+
+    return lower->second +
+           fraction * (upper->second - lower->second);
+}
+
+} // anonymous namespace
+
+
 
 void IdealGasConstPressureReactor::getState(double* y)
 {
@@ -83,21 +201,18 @@ void IdealGasConstPressureReactor::eval(double time, double* LHS, double* RHS)
     if (m_chem) {
         m_kin->getNetProductionRates(&m_wdot[0]); // "omega dot"
 
-        // =============================
-        // Experiment A0: H2O Source Term Pass-Through
-        // =============================
+        // Experiment A1: External tabulated H2O source
 
-        // 1. Find the H2O species index
         size_t k_H2O = m_thermo->speciesIndex("H2O");
 
-        // 2. Read the original H2O production rate
-        double S_H2O_original = m_wdot[k_H2O];
+        // Obtain mass-based source from the table [kg/m3/s].
+        double S_H2O_table = lookupH2OSource(time);
 
-        // 3. Define the replacement source
-        double S_H2O_replacement = 1.10 * S_H2O_original;
+        // Convert to molar production rate [kmol/m3/s].
+        double omega_H2O_table = S_H2O_table / mw[k_H2O];
 
-        // 4. Feed the replacement back into the reactor
-        m_wdot[k_H2O] = S_H2O_replacement;
+        // Replace Cantera's original H2O production rate.
+        m_wdot[k_H2O] = omega_H2O_table;
 
     }
 
